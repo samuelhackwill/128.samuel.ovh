@@ -1,0 +1,18 @@
+{
+  "name": "128",
+  "private": true,
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "build": "pnpm build:web && pnpm build:server",
+    "build:server": "cargo build --manifest-path apps/server/Cargo.toml",
+    "build:web": "pnpm --recursive run build",
+    "dev:server": "cargo run --manifest-path apps/server/Cargo.toml",
+    "dev:web": "pnpm --filter @128/web dev",
+    "typecheck": "pnpm typecheck:web && pnpm typecheck:server",
+    "typecheck:server": "cargo check --manifest-path apps/server/Cargo.toml",
+    "typecheck:web": "pnpm --recursive run typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

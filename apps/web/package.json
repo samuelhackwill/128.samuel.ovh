@@ -1,0 +1,19 @@
+{
+  "name": "@128/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@128/games": "workspace:*",
+    "@128/protocol": "workspace:*",
+    "pixi.js": "^8.10.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

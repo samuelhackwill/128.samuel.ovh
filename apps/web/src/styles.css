@@ -1,0 +1,16 @@
+html,
+body,
+#app,
+[data-app="128"] {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+[data-app="128"] {
+  cursor: none;
+}
+
+[data-app="128"] canvas {
+  display: block;
+}
