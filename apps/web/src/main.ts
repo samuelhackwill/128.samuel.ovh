@@ -5,6 +5,7 @@ import { listenForMouseInput } from "./input/mouse.js";
 import { connectToGame } from "./network/client.js";
 import { createRenderer } from "./rendering/create-renderer.js";
 import { createPlayerCursorRenderer } from "./rendering/player-cursors.js";
+import { createWorldViewport } from "./rendering/world-viewport.js";
 import "./styles.css";
 
 async function bootstrap(): Promise<void> {
@@ -16,14 +17,29 @@ async function bootstrap(): Promise<void> {
 
   const appRoot = createAppRoot(container);
   const renderer = await createRenderer(appRoot);
-  const playerCursors = createPlayerCursorRenderer(renderer.stage, renderer.ticker);
+  const worldViewport = createWorldViewport(renderer);
+  const playerCursors = createPlayerCursorRenderer(worldViewport.container, renderer.ticker);
+  let resolveWorldReady = (): void => {};
+  const worldReady = new Promise<void>((resolve) => {
+    resolveWorldReady = resolve;
+  });
 
   const connection = connectToGame(
     import.meta.env.VITE_WEBTRANSPORT_URL ?? "https://localhost:4433/game",
-    (event) => handleServerEvent(event, playerCursors),
+    (event) => {
+      if (event.type === "connected") {
+        worldViewport.setSize(event.world);
+        resolveWorldReady();
+      }
+      handleServerEvent(event, playerCursors);
+    },
   );
-  await connection.ready;
-  listenForMouseInput(appRoot, (event) => connection.send(event));
+  await Promise.all([connection.ready, worldReady]);
+  listenForMouseInput(
+    renderer.canvas,
+    (clientX, clientY) => worldViewport.clientToWorld(clientX, clientY),
+    (event) => connection.send(event),
+  );
 }
 
 function handleServerEvent(

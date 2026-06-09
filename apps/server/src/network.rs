@@ -10,7 +10,7 @@ use wtransport::endpoint::endpoint_side::Server;
 use wtransport::tls::Sha256DigestFmt;
 use wtransport::{Endpoint, Identity, ServerConfig};
 
-use crate::protocol::{ClientEvent, ServerEvent};
+use crate::protocol::{ClientEvent, ServerEvent, WORLD_CONFIG};
 use crate::state::{SharedState, send_reliable};
 
 const MAX_RELIABLE_EVENT_SIZE: usize = 64 * 1024;
@@ -59,7 +59,10 @@ async fn handle_connection(
 
     send_reliable(
         &connection,
-        &serde_json::to_vec(&ServerEvent::Connected { player_id })?,
+        &serde_json::to_vec(&ServerEvent::Connected {
+            player_id,
+            world: WORLD_CONFIG,
+        })?,
     )
     .await?;
     state.add_player(player_id, connection.clone()).await;

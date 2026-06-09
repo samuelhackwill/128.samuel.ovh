@@ -1,5 +1,6 @@
 mod network;
 mod protocol;
+mod simulation;
 mod state;
 
 use std::path::PathBuf;
@@ -45,7 +46,7 @@ async fn run_simulation(state: Arc<SharedState>) {
 
     loop {
         interval.tick().await;
-        let tick = state.advance_tick().await;
+        let tick = state.advance_simulation(1.0 / TICK_RATE as f64).await;
 
         if tick % (TICK_RATE / SNAPSHOT_RATE) == 0 {
             state.broadcast_snapshot().await;

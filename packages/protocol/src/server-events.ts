@@ -2,6 +2,11 @@ export type ServerEvent =
   | {
       type: "connected";
       playerId: string;
+      world: {
+        width: number;
+        height: number;
+        cursorRadius: number;
+      };
     }
   | {
       type: "player-joined";

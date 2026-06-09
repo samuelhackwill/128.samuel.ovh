@@ -1,18 +1,22 @@
 import type { ClientEvent } from "@128/protocol";
 
+import type { WorldPoint } from "../rendering/world-viewport.js";
+
 export function listenForMouseInput(
   target: HTMLElement,
+  toWorld: (clientX: number, clientY: number) => WorldPoint,
   send: (event: ClientEvent) => void,
 ): () => void {
   let sequence = 0;
 
   const onPointerMove = (event: PointerEvent): void => {
+    const point = toWorld(event.clientX, event.clientY);
     send({
       type: "pointer-move",
       sequence: sequence++,
       clientTime: performance.now(),
-      x: event.clientX,
-      y: event.clientY,
+      x: point.x,
+      y: point.y,
     });
   };
   const onPointerDown = (event: PointerEvent): void => {

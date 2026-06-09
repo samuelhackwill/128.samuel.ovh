@@ -6,14 +6,14 @@ use tracing::warn;
 use uuid::Uuid;
 use wtransport::Connection;
 
-use crate::protocol::{ClientEvent, PlayerSnapshot, ServerEvent};
+use crate::protocol::{ClientEvent, PlayerSnapshot, ServerEvent, WORLD_CONFIG};
+use crate::simulation::{CursorBody, simulate_cursors};
 
 #[derive(Debug)]
 struct Player {
     id: Uuid,
     supports_datagrams: bool,
-    x: f64,
-    y: f64,
+    body: CursorBody,
     last_sequence: u64,
 }
 
@@ -42,8 +42,7 @@ impl SharedState {
             Player {
                 id,
                 supports_datagrams: false,
-                x: 0.0,
-                y: 0.0,
+                body: CursorBody::centered(),
                 last_sequence: 0,
             },
         );
@@ -76,10 +75,11 @@ impl SharedState {
                 y,
             } => {
                 let _ = client_time;
-                if sequence >= player.last_sequence {
+                if sequence >= player.last_sequence
+                    && let Some((x, y)) = clamp_to_world(x, y)
+                {
                     player.last_sequence = sequence;
-                    player.x = x;
-                    player.y = y;
+                    player.body.set_target(x, y);
                 }
             }
             ClientEvent::PointerButton {
@@ -94,7 +94,19 @@ impl SharedState {
         }
     }
 
-    pub async fn advance_tick(&self) -> u64 {
+    pub async fn advance_simulation(&self, delta_seconds: f64) -> u64 {
+        let mut players = self.players.write().await;
+        let ids: Vec<_> = players.keys().copied().collect();
+        let mut bodies: Vec<_> = ids.iter().map(|id| players[id].body).collect();
+
+        simulate_cursors(&mut bodies, delta_seconds);
+        for (id, body) in ids.into_iter().zip(bodies) {
+            if let Some(player) = players.get_mut(&id) {
+                player.body = body;
+            }
+        }
+        drop(players);
+
         let mut tick = self.tick.write().await;
         *tick += 1;
         *tick
@@ -109,8 +121,8 @@ impl SharedState {
             .values()
             .map(|player| PlayerSnapshot {
                 id: player.id,
-                x: player.x,
-                y: player.y,
+                x: player.body.x,
+                y: player.body.y,
             })
             .collect();
         let event = ServerEvent::State {
@@ -173,4 +185,32 @@ pub async fn send_reliable(connection: &Connection, payload: &[u8]) -> anyhow::R
     stream.write_all(payload).await?;
     stream.finish().await?;
     Ok(())
+}
+
+fn clamp_to_world(x: f64, y: f64) -> Option<(f64, f64)> {
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+
+    Some((
+        x.clamp(0.0, WORLD_CONFIG.width),
+        y.clamp(0.0, WORLD_CONFIG.height),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_to_world;
+
+    #[test]
+    fn clamps_pointer_positions_to_the_world() {
+        assert_eq!(clamp_to_world(-10.0, 2000.0), Some((0.0, 1080.0)));
+        assert_eq!(clamp_to_world(960.0, 540.0), Some((960.0, 540.0)));
+    }
+
+    #[test]
+    fn rejects_non_finite_pointer_positions() {
+        assert_eq!(clamp_to_world(f64::NAN, 0.0), None);
+        assert_eq!(clamp_to_world(0.0, f64::INFINITY), None);
+    }
 }

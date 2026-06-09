@@ -38,5 +38,10 @@ Pointer movement uses unreliable WebTransport datagrams. Discrete events use rel
 unidirectional streams. Production deployment should use a trusted TLS certificate rather
 than the generated development certificate.
 
+The authoritative server defines a `1920 x 1080` logical world. Browsers preserve its
+16:9 aspect ratio with letterboxing or pillarboxing and translate local pointer positions
+into logical world coordinates before sending them. Cursor targets are simulated centrally
+with bounded movement, world constraints, and server-authoritative cursor collisions.
+
 Browser-pinned WebTransport development certificates are valid for at most two weeks.
 Delete `apps/server/certs/cert.pem` and `apps/server/certs/key.pem` to regenerate them.

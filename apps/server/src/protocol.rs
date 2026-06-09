@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const WORLD_CONFIG: WorldConfig = WorldConfig {
+    width: 1920.0,
+    height: 1080.0,
+    cursor_radius: 24.0,
+};
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ClientEvent {
@@ -29,6 +35,7 @@ pub enum ServerEvent {
     Connected {
         #[serde(rename = "playerId")]
         player_id: Uuid,
+        world: WorldConfig,
     },
     PlayerJoined {
         #[serde(rename = "playerId")]
@@ -46,6 +53,14 @@ pub enum ServerEvent {
     },
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorldConfig {
+    pub width: f64,
+    pub height: f64,
+    pub cursor_radius: f64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PlayerSnapshot {
     pub id: Uuid,
@@ -55,18 +70,19 @@ pub struct PlayerSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientEvent, ServerEvent};
+    use super::{ClientEvent, ServerEvent, WORLD_CONFIG};
     use uuid::Uuid;
 
     #[test]
     fn server_events_match_the_typescript_wire_format() {
         let event = ServerEvent::Connected {
             player_id: Uuid::nil(),
+            world: WORLD_CONFIG,
         };
 
         assert_eq!(
             serde_json::to_string(&event).unwrap(),
-            r#"{"type":"connected","playerId":"00000000-0000-0000-0000-000000000000"}"#
+            r#"{"type":"connected","playerId":"00000000-0000-0000-0000-000000000000","world":{"width":1920.0,"height":1080.0,"cursorRadius":24.0}}"#
         );
     }
 
