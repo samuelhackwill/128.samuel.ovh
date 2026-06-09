@@ -6,12 +6,15 @@ use tracing::warn;
 use uuid::Uuid;
 use wtransport::Connection;
 
-use crate::protocol::{ClientEvent, PlayerSnapshot, ServerEvent, WORLD_CONFIG};
+use crate::protocol::{
+    ClientEvent, POINTER_HEIGHT, POINTER_WIDTH, PlayerSnapshot, ServerEvent, WORLD_CONFIG,
+};
 use crate::simulation::{CursorBody, simulate_cursors};
 
 #[derive(Debug)]
 struct Player {
     id: Uuid,
+    number: u16,
     supports_datagrams: bool,
     body: CursorBody,
     last_sequence: u64,
@@ -36,19 +39,24 @@ impl Default for SharedState {
 }
 
 impl SharedState {
-    pub async fn add_player(&self, id: Uuid, connection: Connection) {
-        self.players.write().await.insert(
+    pub async fn add_player(&self, id: Uuid, requested_number: Option<u16>) -> u16 {
+        let mut players = self.players.write().await;
+        let number = available_player_number(&players, requested_number);
+        players.insert(
             id,
             Player {
                 id,
+                number,
                 supports_datagrams: false,
                 body: CursorBody::centered(),
                 last_sequence: 0,
             },
         );
+        number
+    }
+
+    pub async fn add_connection(&self, id: Uuid, connection: Connection) {
         self.connections.write().await.insert(id, connection);
-        self.broadcast_reliable(&ServerEvent::PlayerJoined { player_id: id })
-            .await;
     }
 
     pub async fn remove_player(&self, id: Uuid) {
@@ -121,6 +129,7 @@ impl SharedState {
             .values()
             .map(|player| PlayerSnapshot {
                 id: player.id,
+                number: player.number,
                 x: player.body.x,
                 y: player.body.y,
             })
@@ -180,6 +189,18 @@ impl SharedState {
     }
 }
 
+fn available_player_number(players: &HashMap<Uuid, Player>, requested: Option<u16>) -> u16 {
+    if let Some(number) = requested
+        .filter(|number| *number > 0 && players.values().all(|player| player.number != *number))
+    {
+        return number;
+    }
+
+    (1..=u16::MAX)
+        .find(|number| players.values().all(|player| player.number != *number))
+        .expect("all player numbers are occupied")
+}
+
 pub async fn send_reliable(connection: &Connection, payload: &[u8]) -> anyhow::Result<()> {
     let mut stream = connection.open_uni().await?.await?;
     stream.write_all(payload).await?;
@@ -193,18 +214,22 @@ fn clamp_to_world(x: f64, y: f64) -> Option<(f64, f64)> {
     }
 
     Some((
-        x.clamp(0.0, WORLD_CONFIG.width),
-        y.clamp(0.0, WORLD_CONFIG.height),
+        x.clamp(0.0, WORLD_CONFIG.width - POINTER_WIDTH),
+        y.clamp(0.0, WORLD_CONFIG.height - POINTER_HEIGHT),
     ))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::clamp_to_world;
+    use std::collections::HashMap;
+
+    use super::{Player, available_player_number, clamp_to_world};
+    use crate::simulation::CursorBody;
+    use uuid::Uuid;
 
     #[test]
     fn clamps_pointer_positions_to_the_world() {
-        assert_eq!(clamp_to_world(-10.0, 2000.0), Some((0.0, 1080.0)));
+        assert_eq!(clamp_to_world(-10.0, 2000.0), Some((0.0, 1049.0)));
         assert_eq!(clamp_to_world(960.0, 540.0), Some((960.0, 540.0)));
     }
 
@@ -212,5 +237,40 @@ mod tests {
     fn rejects_non_finite_pointer_positions() {
         assert_eq!(clamp_to_world(f64::NAN, 0.0), None);
         assert_eq!(clamp_to_world(0.0, f64::INFINITY), None);
+    }
+
+    #[test]
+    fn uses_an_available_requested_player_number() {
+        let players = players_with_numbers(&[1, 3]);
+
+        assert_eq!(available_player_number(&players, Some(12)), 12);
+    }
+
+    #[test]
+    fn replaces_missing_invalid_or_duplicate_player_numbers() {
+        let players = players_with_numbers(&[1, 3]);
+
+        assert_eq!(available_player_number(&players, None), 2);
+        assert_eq!(available_player_number(&players, Some(0)), 2);
+        assert_eq!(available_player_number(&players, Some(3)), 2);
+    }
+
+    fn players_with_numbers(numbers: &[u16]) -> HashMap<Uuid, Player> {
+        numbers
+            .iter()
+            .map(|number| {
+                let id = Uuid::new_v4();
+                (
+                    id,
+                    Player {
+                        id,
+                        number: *number,
+                        supports_datagrams: false,
+                        body: CursorBody::centered(),
+                        last_sequence: 0,
+                    },
+                )
+            })
+            .collect()
     }
 }

@@ -1,9 +1,21 @@
-use crate::protocol::WORLD_CONFIG;
+use crate::protocol::{POINTER_HEIGHT, POINTER_POINTS, POINTER_WIDTH, Point, WORLD_CONFIG};
 
-pub const CURSOR_RADIUS: f64 = WORLD_CONFIG.cursor_radius;
 const CURSOR_MAX_SPEED: f64 = 9000.0;
-const MAX_SUBSTEP_DISTANCE: f64 = CURSOR_RADIUS / 2.0;
-const COLLISION_ITERATIONS: usize = 6;
+const MAX_SUBSTEP_DISTANCE: f64 = 4.0;
+const COLLISION_ITERATIONS: usize = 12;
+const COLLISION_EPSILON: f64 = 0.001;
+
+// Convex decomposition of the canonical concave pointer polygon for SAT collision checks.
+const HEAD_LEFT: [Point; 3] = [POINTER_POINTS[0], POINTER_POINTS[1], POINTER_POINTS[2]];
+const HEAD_MIDDLE: [Point; 3] = [POINTER_POINTS[0], POINTER_POINTS[2], POINTER_POINTS[5]];
+const HEAD_RIGHT: [Point; 3] = [POINTER_POINTS[0], POINTER_POINTS[5], POINTER_POINTS[6]];
+const STEM: [Point; 4] = [
+    POINTER_POINTS[2],
+    POINTER_POINTS[3],
+    POINTER_POINTS[4],
+    POINTER_POINTS[5],
+];
+const COLLISION_PIECES: [&[Point]; 4] = [&HEAD_LEFT, &HEAD_MIDDLE, &HEAD_RIGHT, &STEM];
 
 #[derive(Clone, Copy, Debug)]
 pub struct CursorBody {
@@ -13,10 +25,17 @@ pub struct CursorBody {
     target_y: f64,
 }
 
+#[derive(Clone, Copy)]
+struct Collision {
+    normal_x: f64,
+    normal_y: f64,
+    depth: f64,
+}
+
 impl CursorBody {
     pub fn centered() -> Self {
-        let x = WORLD_CONFIG.width / 2.0;
-        let y = WORLD_CONFIG.height / 2.0;
+        let x = (WORLD_CONFIG.width - POINTER_WIDTH) / 2.0;
+        let y = (WORLD_CONFIG.height - POINTER_HEIGHT) / 2.0;
 
         Self {
             x,
@@ -78,52 +97,138 @@ fn move_toward_target(body: &mut CursorBody, maximum_distance: f64) {
 }
 
 fn resolve_collisions(bodies: &mut [CursorBody]) {
-    let minimum_distance = CURSOR_RADIUS * 2.0;
-
     for left_index in 0..bodies.len() {
         for right_index in (left_index + 1)..bodies.len() {
             let (left, right) = bodies.split_at_mut(right_index);
             let left = &mut left[left_index];
             let right = &mut right[0];
-            let dx = right.x - left.x;
-            let dy = right.y - left.y;
-            let distance_squared = dx * dx + dy * dy;
 
-            if distance_squared >= minimum_distance * minimum_distance {
+            let Some(collision) = pointer_collision(left, right, left_index, right_index) else {
                 continue;
-            }
-
-            let (normal_x, normal_y, distance) = if distance_squared > f64::EPSILON {
-                let distance = distance_squared.sqrt();
-                (dx / distance, dy / distance, distance)
-            } else {
-                separation_direction(left_index, right_index)
             };
-            let correction = (minimum_distance - distance) / 2.0;
+            let correction = (collision.depth + COLLISION_EPSILON) / 2.0;
 
-            left.x -= normal_x * correction;
-            left.y -= normal_y * correction;
-            right.x += normal_x * correction;
-            right.y += normal_y * correction;
+            left.x -= collision.normal_x * correction;
+            left.y -= collision.normal_y * correction;
+            right.x += collision.normal_x * correction;
+            right.y += collision.normal_y * correction;
         }
     }
 }
 
-fn constrain_to_world(body: &mut CursorBody) {
-    body.x = body
-        .x
-        .clamp(CURSOR_RADIUS, WORLD_CONFIG.width - CURSOR_RADIUS);
-    body.y = body
-        .y
-        .clamp(CURSOR_RADIUS, WORLD_CONFIG.height - CURSOR_RADIUS);
+fn pointer_collision(
+    left: &CursorBody,
+    right: &CursorBody,
+    left_index: usize,
+    right_index: usize,
+) -> Option<Collision> {
+    if !aabbs_overlap(left, right) {
+        return None;
+    }
+
+    let fallback_direction = separation_direction(left_index, right_index);
+    let direction = if (right.x - left.x).hypot(right.y - left.y) > f64::EPSILON {
+        (right.x - left.x, right.y - left.y)
+    } else {
+        fallback_direction
+    };
+    let mut deepest: Option<Collision> = None;
+
+    for left_piece in COLLISION_PIECES {
+        for right_piece in COLLISION_PIECES {
+            let Some(collision) = convex_collision(left_piece, left, right_piece, right, direction)
+            else {
+                continue;
+            };
+
+            if deepest.is_none_or(|current| collision.depth > current.depth) {
+                deepest = Some(collision);
+            }
+        }
+    }
+
+    deepest
 }
 
-fn separation_direction(left_index: usize, right_index: usize) -> (f64, f64, f64) {
+fn convex_collision(
+    left_piece: &[Point],
+    left: &CursorBody,
+    right_piece: &[Point],
+    right: &CursorBody,
+    direction: (f64, f64),
+) -> Option<Collision> {
+    let mut minimum = Collision {
+        normal_x: 0.0,
+        normal_y: 0.0,
+        depth: f64::INFINITY,
+    };
+
+    for piece in [left_piece, right_piece] {
+        for edge_index in 0..piece.len() {
+            let start = piece[edge_index];
+            let end = piece[(edge_index + 1) % piece.len()];
+            let edge_x = end.x - start.x;
+            let edge_y = end.y - start.y;
+            let length = edge_x.hypot(edge_y);
+
+            if length <= f64::EPSILON {
+                continue;
+            }
+
+            let mut normal_x = -edge_y / length;
+            let mut normal_y = edge_x / length;
+            if normal_x * direction.0 + normal_y * direction.1 < 0.0 {
+                normal_x = -normal_x;
+                normal_y = -normal_y;
+            }
+
+            let (left_min, left_max) = project(left_piece, left, normal_x, normal_y);
+            let (right_min, right_max) = project(right_piece, right, normal_x, normal_y);
+            let overlap = left_max.min(right_max) - left_min.max(right_min);
+
+            if overlap <= COLLISION_EPSILON {
+                return None;
+            }
+            if overlap < minimum.depth {
+                minimum = Collision {
+                    normal_x,
+                    normal_y,
+                    depth: overlap,
+                };
+            }
+        }
+    }
+
+    minimum.depth.is_finite().then_some(minimum)
+}
+
+fn project(piece: &[Point], body: &CursorBody, axis_x: f64, axis_y: f64) -> (f64, f64) {
+    piece
+        .iter()
+        .map(|point| (point.x + body.x) * axis_x + (point.y + body.y) * axis_y)
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
+            (min.min(value), max.max(value))
+        })
+}
+
+fn aabbs_overlap(left: &CursorBody, right: &CursorBody) -> bool {
+    left.x < right.x + POINTER_WIDTH
+        && left.x + POINTER_WIDTH > right.x
+        && left.y < right.y + POINTER_HEIGHT
+        && left.y + POINTER_HEIGHT > right.y
+}
+
+fn constrain_to_world(body: &mut CursorBody) {
+    body.x = body.x.clamp(0.0, WORLD_CONFIG.width - POINTER_WIDTH);
+    body.y = body.y.clamp(0.0, WORLD_CONFIG.height - POINTER_HEIGHT);
+}
+
+fn separation_direction(left_index: usize, right_index: usize) -> (f64, f64) {
     match (left_index.wrapping_mul(31) ^ right_index.wrapping_mul(17)) % 4 {
-        0 => (1.0, 0.0, 0.0),
-        1 => (0.0, 1.0, 0.0),
-        2 => (-1.0, 0.0, 0.0),
-        _ => (0.0, -1.0, 0.0),
+        0 => (1.0, 0.0),
+        1 => (0.0, 1.0),
+        2 => (-1.0, 0.0),
+        _ => (0.0, -1.0),
     }
 }
 
@@ -133,7 +238,10 @@ fn distance(from_x: f64, from_y: f64, to_x: f64, to_y: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CURSOR_MAX_SPEED, CURSOR_RADIUS, CursorBody, simulate_cursors};
+    use super::{
+        CURSOR_MAX_SPEED, CursorBody, POINTER_HEIGHT, POINTER_WIDTH, pointer_collision,
+        simulate_cursors,
+    };
 
     const TICK_SECONDS: f64 = 1.0 / 60.0;
 
@@ -156,8 +264,7 @@ mod tests {
 
         simulate_cursors(&mut bodies, TICK_SECONDS);
 
-        assert!(bodies[0].x < bodies[1].x);
-        assert!(bodies[1].x - bodies[0].x >= CURSOR_RADIUS * 2.0 - 0.001);
+        assert!(!overlap(&bodies[0], &bodies[1]));
     }
 
     #[test]
@@ -169,31 +276,54 @@ mod tests {
 
         simulate_cursors(&mut bodies, TICK_SECONDS);
 
-        let distance = (bodies[1].x - bodies[0].x).hypot(bodies[1].y - bodies[0].y);
-        assert!(distance >= CURSOR_RADIUS * 2.0 - 0.001);
+        assert!(!overlap(&bodies[0], &bodies[1]));
     }
 
     #[test]
-    fn constrains_cursor_centers_to_world_bounds() {
-        let mut bodies = [body_at(30.0, 30.0, 0.0, 0.0)];
+    fn collision_follows_pointer_shape_instead_of_its_bounding_box() {
+        let left = body_at(100.0, 100.0, 100.0, 100.0);
+        let right = body_at(120.0, 125.0, 120.0, 125.0);
+
+        assert!(super::aabbs_overlap(&left, &right));
+        assert!(!overlap(&left, &right));
+    }
+
+    #[test]
+    fn collides_when_pointer_silhouettes_overlap() {
+        let left = body_at(100.0, 100.0, 100.0, 100.0);
+        let right = body_at(108.0, 108.0, 108.0, 108.0);
+
+        assert!(overlap(&left, &right));
+    }
+
+    #[test]
+    fn constrains_pointer_silhouette_to_world_bounds() {
+        let mut bodies = [body_at(30.0, 30.0, -100.0, -100.0)];
 
         simulate_cursors(&mut bodies, TICK_SECONDS);
+        assert_eq!(bodies[0].x, 0.0);
+        assert_eq!(bodies[0].y, 0.0);
 
-        assert_eq!(bodies[0].x, CURSOR_RADIUS);
-        assert_eq!(bodies[0].y, CURSOR_RADIUS);
+        bodies[0].set_target(super::WORLD_CONFIG.width, super::WORLD_CONFIG.height);
+        simulate_cursors(&mut bodies, 1.0);
+        assert_eq!(bodies[0].x, super::WORLD_CONFIG.width - POINTER_WIDTH);
+        assert_eq!(bodies[0].y, super::WORLD_CONFIG.height - POINTER_HEIGHT);
     }
 
     #[test]
     fn separates_cursors_that_target_the_same_world_edge() {
         let mut bodies = [
-            body_at(CURSOR_RADIUS, 500.0, 0.0, 500.0),
-            body_at(CURSOR_RADIUS, 500.0, 0.0, 500.0),
+            body_at(0.0, 500.0, 0.0, 500.0),
+            body_at(0.0, 500.0, 0.0, 500.0),
         ];
 
         simulate_cursors(&mut bodies, TICK_SECONDS);
 
-        let distance = (bodies[1].x - bodies[0].x).hypot(bodies[1].y - bodies[0].y);
-        assert!(distance >= CURSOR_RADIUS * 2.0 - 0.001);
+        assert!(!overlap(&bodies[0], &bodies[1]));
+    }
+
+    fn overlap(left: &CursorBody, right: &CursorBody) -> bool {
+        pointer_collision(left, right, 0, 1).is_some()
     }
 
     fn body_at(x: f64, y: f64, target_x: f64, target_y: f64) -> CursorBody {

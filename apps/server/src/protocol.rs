@@ -1,10 +1,26 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const POINTER_WIDTH: f64 = 23.0;
+pub const POINTER_HEIGHT: f64 = 31.0;
+pub const POINTER_POINTS: [Point; 7] = [
+    Point { x: 0.0, y: 0.0 },
+    Point { x: 0.0, y: 26.0 },
+    Point { x: 7.0, y: 19.0 },
+    Point { x: 12.0, y: 31.0 },
+    Point { x: 18.0, y: 28.0 },
+    Point { x: 13.0, y: 17.0 },
+    Point { x: 23.0, y: 17.0 },
+];
+
 pub const WORLD_CONFIG: WorldConfig = WorldConfig {
     width: 1920.0,
     height: 1080.0,
-    cursor_radius: 24.0,
+    pointer: PointerConfig {
+        width: POINTER_WIDTH,
+        height: POINTER_HEIGHT,
+        points: &POINTER_POINTS,
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -35,11 +51,15 @@ pub enum ServerEvent {
     Connected {
         #[serde(rename = "playerId")]
         player_id: Uuid,
+        #[serde(rename = "playerNumber")]
+        player_number: u16,
         world: WorldConfig,
     },
     PlayerJoined {
         #[serde(rename = "playerId")]
         player_id: Uuid,
+        #[serde(rename = "playerNumber")]
+        player_number: u16,
     },
     PlayerLeft {
         #[serde(rename = "playerId")]
@@ -58,12 +78,27 @@ pub enum ServerEvent {
 pub struct WorldConfig {
     pub width: f64,
     pub height: f64,
-    pub cursor_radius: f64,
+    pub pointer: PointerConfig,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PointerConfig {
+    pub width: f64,
+    pub height: f64,
+    pub points: &'static [Point],
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct PlayerSnapshot {
     pub id: Uuid,
+    pub number: u16,
     pub x: f64,
     pub y: f64,
 }
@@ -77,12 +112,13 @@ mod tests {
     fn server_events_match_the_typescript_wire_format() {
         let event = ServerEvent::Connected {
             player_id: Uuid::nil(),
+            player_number: 12,
             world: WORLD_CONFIG,
         };
 
         assert_eq!(
             serde_json::to_string(&event).unwrap(),
-            r#"{"type":"connected","playerId":"00000000-0000-0000-0000-000000000000","world":{"width":1920.0,"height":1080.0,"cursorRadius":24.0}}"#
+            r#"{"type":"connected","playerId":"00000000-0000-0000-0000-000000000000","playerNumber":12,"world":{"width":1920.0,"height":1080.0,"pointer":{"width":23.0,"height":31.0,"points":[{"x":0.0,"y":0.0},{"x":0.0,"y":26.0},{"x":7.0,"y":19.0},{"x":12.0,"y":31.0},{"x":18.0,"y":28.0},{"x":13.0,"y":17.0},{"x":23.0,"y":17.0}]}}}"#
         );
     }
 

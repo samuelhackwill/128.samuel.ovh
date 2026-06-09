@@ -1,21 +1,34 @@
 import type { ServerEvent } from "@128/protocol";
-import { Container, Graphics, type Ticker } from "pixi.js";
+import {
+  BitmapFont,
+  BitmapText,
+  Container,
+  Graphics,
+  GraphicsContext,
+  type Ticker,
+} from "pixi.js";
+
+import type { PointerShape } from "./world-viewport.js";
 
 type StateEvent = Extract<ServerEvent, { type: "state" }>;
 
 interface Cursor {
-  graphic: Graphics;
+  label: BitmapText;
   targetX: number;
   targetY: number;
+  view: Container;
 }
 
 export interface PlayerCursorRenderer {
   destroy(): void;
-  setLocalPlayerId(playerId: string): void;
+  setPointerShape(pointer: PointerShape): void;
   update(players: StateEvent["players"]): void;
 }
 
 const CURSOR_SMOOTHING = 0.35;
+const PLAYER_NUMBER_FONT = "128-player-number";
+const PLAYER_NUMBER_FONT_SIZE = 14;
+let playerNumberFontInstalled = false;
 
 export function createPlayerCursorRenderer(
   stage: Container,
@@ -23,15 +36,24 @@ export function createPlayerCursorRenderer(
 ): PlayerCursorRenderer {
   const layer = new Container();
   const cursors = new Map<string, Cursor>();
-  let localPlayerId: string | undefined;
+  let pointer: PointerShape | undefined;
+  let pointerContext: GraphicsContext | undefined;
 
+  installPlayerNumberFont();
   stage.addChild(layer);
 
   const animate = (): void => {
     for (const cursor of cursors.values()) {
-      cursor.graphic.x += (cursor.targetX - cursor.graphic.x) * CURSOR_SMOOTHING;
-      cursor.graphic.y += (cursor.targetY - cursor.graphic.y) * CURSOR_SMOOTHING;
+      cursor.view.x += (cursor.targetX - cursor.view.x) * CURSOR_SMOOTHING;
+      cursor.view.y += (cursor.targetY - cursor.view.y) * CURSOR_SMOOTHING;
     }
+  };
+
+  const clearCursors = (): void => {
+    for (const cursor of cursors.values()) {
+      cursor.view.destroy({ children: true });
+    }
+    cursors.clear();
   };
 
   ticker.add(animate);
@@ -39,21 +61,26 @@ export function createPlayerCursorRenderer(
   return {
     destroy: () => {
       ticker.remove(animate);
-      layer.destroy({ children: true });
-      cursors.clear();
+      clearCursors();
+      pointerContext?.destroy();
+      layer.destroy();
     },
-    setLocalPlayerId: (playerId) => {
-      localPlayerId = playerId;
-      for (const [id, cursor] of cursors) {
-        cursor.graphic.alpha = id === localPlayerId ? 1 : 0.8;
-      }
+    setPointerShape: (nextPointer) => {
+      clearCursors();
+      pointerContext?.destroy();
+      pointer = nextPointer;
+      pointerContext = createPointerContext(nextPointer);
     },
     update: (players) => {
+      if (!pointer || !pointerContext) {
+        return;
+      }
+
       const activePlayers = new Set(players.map((player) => player.id));
 
       for (const [id, cursor] of cursors) {
         if (!activePlayers.has(id)) {
-          cursor.graphic.destroy();
+          cursor.view.destroy({ children: true });
           cursors.delete(id);
         }
       }
@@ -62,18 +89,14 @@ export function createPlayerCursorRenderer(
         let cursor = cursors.get(player.id);
 
         if (!cursor) {
-          const graphic = createCursorGraphic(colorFromPlayerId(player.id));
-          graphic.x = player.x;
-          graphic.y = player.y;
-          graphic.alpha = player.id === localPlayerId ? 1 : 0.8;
-          layer.addChild(graphic);
-
-          cursor = {
-            graphic,
-            targetX: player.x,
-            targetY: player.y,
-          };
+          cursor = createCursor(pointer, pointerContext, player.number);
+          cursor.view.position.set(player.x, player.y);
+          cursor.targetX = player.x;
+          cursor.targetY = player.y;
+          layer.addChild(cursor.view);
           cursors.set(player.id, cursor);
+        } else if (cursor.label.text !== String(player.number)) {
+          cursor.label.text = String(player.number);
         }
 
         cursor.targetX = player.x;
@@ -83,21 +106,68 @@ export function createPlayerCursorRenderer(
   };
 }
 
-function createCursorGraphic(color: number): Graphics {
-  return new Graphics()
-    .poly([0, 0, 0, 26, 7, 19, 12, 31, 18, 28, 13, 17, 23, 17])
-    .fill(color)
-    .stroke({ color: 0xffffff, width: 2 });
+function createPointerContext(pointer: PointerShape): GraphicsContext {
+  const points = pointer.points.flatMap((point) => [point.x, point.y]);
+
+  return new GraphicsContext()
+    .poly(points)
+    .fill(0x000000)
+    .stroke({
+      color: 0xffffff,
+      join: "miter",
+      miterLimit: 4,
+      pixelLine: true,
+      width: 1,
+    });
 }
 
-function colorFromPlayerId(playerId: string): number {
-  let hash = 0;
-  for (const character of playerId) {
-    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+function createCursor(
+  pointer: PointerShape,
+  pointerContext: GraphicsContext,
+  playerNumber: number,
+): Cursor {
+  const view = new Container();
+  const graphic = new Graphics({ context: pointerContext, roundPixels: true });
+  const label = new BitmapText({
+    roundPixels: true,
+    style: {
+      fill: 0xffffff,
+      fontFamily: PLAYER_NUMBER_FONT,
+      fontSize: PLAYER_NUMBER_FONT_SIZE,
+      stroke: { color: 0x000000, width: 3 },
+    },
+    text: String(playerNumber),
+  });
+
+  label.anchor.set(0, 1);
+  label.position.set(pointer.width + 4, pointer.height);
+  view.addChild(graphic, label);
+
+  return {
+    label,
+    targetX: 0,
+    targetY: 0,
+    view,
+  };
+}
+
+function installPlayerNumberFont(): void {
+  if (playerNumberFontInstalled) {
+    return;
   }
 
-  const red = 80 + (hash & 0x7f);
-  const green = 80 + ((hash >>> 8) & 0x7f);
-  const blue = 80 + ((hash >>> 16) & 0x7f);
-  return (red << 16) | (green << 8) | blue;
+  BitmapFont.install({
+    chars: "0123456789",
+    name: PLAYER_NUMBER_FONT,
+    padding: 4,
+    resolution: Math.min(window.devicePixelRatio, 2),
+    style: {
+      fill: 0xffffff,
+      fontFamily: "Courier New",
+      fontSize: PLAYER_NUMBER_FONT_SIZE,
+      fontWeight: "bold",
+      stroke: { color: 0x000000, width: 3 },
+    },
+  });
+  playerNumberFontInstalled = true;
 }

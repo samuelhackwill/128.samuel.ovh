@@ -5,10 +5,16 @@ export interface WorldPoint {
   y: number;
 }
 
+export interface PointerShape {
+  width: number;
+  height: number;
+  points: Array<WorldPoint>;
+}
+
 export interface WorldSize {
   width: number;
   height: number;
-  cursorRadius: number;
+  pointer: PointerShape;
 }
 
 export interface WorldViewport {
@@ -70,11 +76,9 @@ export function createWorldViewport(application: Application): WorldViewport {
       if (
         !Number.isFinite(size.width) ||
         !Number.isFinite(size.height) ||
-        !Number.isFinite(size.cursorRadius) ||
         size.width <= 0 ||
         size.height <= 0 ||
-        size.cursorRadius <= 0 ||
-        size.cursorRadius * 2 > Math.min(size.width, size.height)
+        !isValidPointerShape(size.pointer, size.width, size.height)
       ) {
         throw new Error("Server provided an invalid world size");
       }
@@ -91,4 +95,29 @@ export function createWorldViewport(application: Application): WorldViewport {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
+}
+
+function isValidPointerShape(
+  pointer: PointerShape,
+  worldWidth: number,
+  worldHeight: number,
+): boolean {
+  return (
+    Number.isFinite(pointer.width) &&
+    Number.isFinite(pointer.height) &&
+    pointer.width > 0 &&
+    pointer.height > 0 &&
+    pointer.width <= worldWidth &&
+    pointer.height <= worldHeight &&
+    pointer.points.length >= 3 &&
+    pointer.points.every(
+      (point) =>
+        Number.isFinite(point.x) &&
+        Number.isFinite(point.y) &&
+        point.x >= 0 &&
+        point.y >= 0 &&
+        point.x <= pointer.width &&
+        point.y <= pointer.height,
+    )
+  );
 }

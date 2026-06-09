@@ -25,10 +25,12 @@ async function bootstrap(): Promise<void> {
   });
 
   const connection = connectToGame(
-    import.meta.env.VITE_WEBTRANSPORT_URL ?? "https://localhost:4433/game",
+    createGameUrl(import.meta.env.VITE_WEBTRANSPORT_URL ?? "https://localhost:4433/game"),
     (event) => {
       if (event.type === "connected") {
         worldViewport.setSize(event.world);
+        playerCursors.setPointerShape(event.world.pointer);
+        setPagePlayerNumber(event.playerNumber);
         resolveWorldReady();
       }
       handleServerEvent(event, playerCursors);
@@ -46,11 +48,36 @@ function handleServerEvent(
   event: ServerEvent,
   cursors: ReturnType<typeof createPlayerCursorRenderer>,
 ): void {
-  if (event.type === "connected") {
-    cursors.setLocalPlayerId(event.playerId);
-  } else if (event.type === "state") {
+  if (event.type === "state") {
     cursors.update(event.players);
   }
+}
+
+function createGameUrl(baseUrl: string): string {
+  const url = new URL(baseUrl, window.location.href);
+  const playerNumber = readRequestedPlayerNumber();
+
+  if (playerNumber !== undefined) {
+    url.searchParams.set("player", String(playerNumber));
+  }
+
+  return url.toString();
+}
+
+function readRequestedPlayerNumber(): number | undefined {
+  const value = new URLSearchParams(window.location.search).get("player");
+  if (!value || !/^\d+$/.test(value)) {
+    return undefined;
+  }
+
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 && number <= 65_535 ? number : undefined;
+}
+
+function setPagePlayerNumber(playerNumber: number): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("player", String(playerNumber));
+  window.history.replaceState(null, "", url);
 }
 
 void bootstrap().catch((error: unknown) => {

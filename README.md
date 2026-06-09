@@ -41,7 +41,18 @@ than the generated development certificate.
 The authoritative server defines a `1920 x 1080` logical world. Browsers preserve its
 16:9 aspect ratio with letterboxing or pillarboxing and translate local pointer positions
 into logical world coordinates before sending them. Cursor targets are simulated centrally
-with bounded movement, world constraints, and server-authoritative cursor collisions.
+with bounded movement, world constraints, and server-authoritative collisions against the
+visible pointer silhouette. The server sends that same pointer polygon to browsers for
+batched Pixi rendering.
+
+Use the `player` query parameter to request a visible pointer number:
+
+```text
+https://128.samuel.ovh/?player=12
+```
+
+Missing, invalid, or already-used numbers are replaced by the first available number, and
+the browser updates its URL to show the number assigned by the server.
 
 Browser-pinned WebTransport development certificates are valid for at most two weeks.
 Delete `apps/server/certs/cert.pem` and `apps/server/certs/key.pem` to regenerate them.

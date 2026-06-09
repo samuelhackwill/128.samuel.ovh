@@ -54,19 +54,32 @@ async fn handle_connection(
     state: Arc<SharedState>,
 ) -> Result<()> {
     let session_request = incoming_session.await?;
+    let requested_player_number = requested_player_number(session_request.path());
     let connection = session_request.accept().await?;
     let player_id = Uuid::new_v4();
+    let player_number = state.add_player(player_id, requested_player_number).await;
 
-    send_reliable(
+    if let Err(error) = send_reliable(
         &connection,
         &serde_json::to_vec(&ServerEvent::Connected {
             player_id,
+            player_number,
             world: WORLD_CONFIG,
         })?,
     )
-    .await?;
-    state.add_player(player_id, connection.clone()).await;
-    info!(%player_id, remote = %connection.remote_address(), "player connected");
+    .await
+    {
+        state.remove_player(player_id).await;
+        return Err(error);
+    }
+    state.add_connection(player_id, connection.clone()).await;
+    state
+        .broadcast_reliable(&ServerEvent::PlayerJoined {
+            player_id,
+            player_number,
+        })
+        .await;
+    info!(%player_id, player_number, remote = %connection.remote_address(), "player connected");
 
     let result = loop {
         tokio::select! {
@@ -99,6 +112,16 @@ async fn handle_connection(
     state.remove_player(player_id).await;
     info!(%player_id, "player disconnected");
     result
+}
+
+fn requested_player_number(path: &str) -> Option<u16> {
+    path.split_once('?')?.1.split('&').find_map(|parameter| {
+        let (key, value) = parameter.split_once('=')?;
+        (key == "player")
+            .then(|| value.parse().ok())
+            .flatten()
+            .filter(|number| *number > 0)
+    })
 }
 
 async fn read_reliable_event(stream: &mut wtransport::RecvStream) -> Result<ClientEvent> {
@@ -150,4 +173,26 @@ async fn secure_private_key(path: &Path) -> Result<()> {
 #[cfg(not(unix))]
 async fn secure_private_key(_path: &Path) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requested_player_number;
+
+    #[test]
+    fn reads_player_number_from_session_path() {
+        assert_eq!(requested_player_number("/game?player=12"), Some(12));
+        assert_eq!(
+            requested_player_number("/game?ignored=yes&player=128"),
+            Some(128)
+        );
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_player_number() {
+        assert_eq!(requested_player_number("/game"), None);
+        assert_eq!(requested_player_number("/game?player=0"), None);
+        assert_eq!(requested_player_number("/game?player=abc"), None);
+        assert_eq!(requested_player_number("/game?player=999999"), None);
+    }
 }
